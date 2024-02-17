@@ -1,20 +1,14 @@
-// 
 // dependencias
-// 
-
 const dependencies = ['child_process', 'import-fresh'];
 
-// 
 // detalhes
-// 
-
 const details = () => ({
     id: "Tdarr_Plugin_yodog_scale_and_transcode",
     Name: "Tdarr_Plugin_yodog_scale_and_transcode",
     Stage: 'Pre-processing',
     Type: "Video",
     Operation: "Transcode",
-    Version: "2024.02.16.2358",
+    Version: "2024.02.17.1545",
     Tags: 'configurable,ffmpeg,h265/hevc,nvenc,pre-processing',
     Description: `
         - this script will:
@@ -96,10 +90,7 @@ const details = () => ({
     ],
 });
 
-// 
 // valores iniciais. deve ser retornado no final com valores atualizados
-// 
-
 const response = {
     container: 'mp4',
     ffmpegMode: true,
@@ -107,10 +98,7 @@ const response = {
     processFile: false,
 };
 
-// 
 // a funcao principal. usando async para esperar os resultados (await) antes de finalizar o plugin
-// 
-
 const plugin = async (file, librarySettings, inputs, otherArguments) => {
     const importFresh = require('import-fresh');
     const library = importFresh('../methods/library.js');
@@ -122,42 +110,49 @@ const plugin = async (file, librarySettings, inputs, otherArguments) => {
     const {promisify} = require('util');
     const execAsync = promisify(exec);
 
-    // criar uma lista com todos os comandos que irao verificar os encoders instalados
-    const allEncoders = ['hevc_amf', 'hevc_nvenc', 'hevc_qsv', 'hevc_vaapi', 'hevc_videotoolbox'];
-    const commands = [];
-    allEncoders.forEach(encoder => {
-        const command = `${otherArguments.ffmpegPath} -f lavfi -i color=c=black:s=256x256:d=1:r=30 -vcodec ${encoder} -f null /dev/null`;
-        commands.push(command);
-    });
-    console.log('commands -->', commands);
+    // verificar se a gpu e nvidia (windows e ubuntu). debian usa 'nvidia-detect'
+    const isNvidiaGpu = await execAsync('nvidia-smi --query-gpu=name --format=csv,noheader').then(success => true).catch(error => false);
+    console.log('isNvidiaGpu -->', isNvidiaGpu);
 
-    // verificar o retorno das promises dos comandos de teste
-    // a verificacao e feita criando um video 'null' com cada encoder
-    // quem nao der erro tem suporte na maquina
+    // verificar se o worker e CPU ou GPU
+    const isGPUworker = Boolean(otherArguments.workerType.includes('gpu'));
+    console.log('isGPUworker -->', isGPUworker);
+
+    // se o worker for de GPU, testar os encoders suportados
     const foundEncoders = [];
-    var arrayOfPromises = commands.map(command => execAsync(command));
-    await Promise.allSettled(arrayOfPromises)
-        .then(results => {
-            results.forEach(({status, value, reason}, index) => {
-                if (status === 'fulfilled') {
-                    console.log('Promise resolved:', index, allEncoders[index], commands[index]);
-                    foundEncoders.push(allEncoders[index]);
-                }
-                else {
-                    console.error('Promise rejected:', index, allEncoders[index], reason.cmd);
-                }
-            });
+    if (isGPUworker) {
+        // criar uma lista com todos os comandos que irao verificar os encoders instalados
+        const allEncoders = ['hevc_amf', 'hevc_nvenc', 'hevc_qsv', 'hevc_vaapi', 'hevc_videotoolbox'];
+        const commands = [];
+        allEncoders.forEach(encoder => {
+            const command = `${otherArguments.ffmpegPath} -f lavfi -i color=c=black:s=256x256:d=1:r=30 -vcodec ${encoder} -f null /dev/null`;
+            commands.push(command);
         });
-    console.log('foundEncoders -->', foundEncoders);
+        console.log('commands -->', commands);
+
+        // verificar o retorno das promises dos comandos de teste
+        // a verificacao e feita criando um video 'null' com cada encoder
+        // quem nao der erro tem suporte na maquina
+        var arrayOfPromises = commands.map(command => execAsync(command));
+        await Promise.allSettled(arrayOfPromises)
+            .then(results => {
+                results.forEach(({status, value, reason}, index) => {
+                    if (status === 'fulfilled') {
+                        console.log('Promise resolved:', index, allEncoders[index], commands[index]);
+                        foundEncoders.push(allEncoders[index]);
+                    }
+                    else {
+                        console.error('Promise rejected:', index, allEncoders[index], reason.cmd);
+                    }
+                });
+            });
+        console.log('foundEncoders -->', foundEncoders);
+    }
 
     // escolher um encoder aleatorio da lista de suportados
     // se a lista estiver vazia, usar o encoder padrao 'hevc' (usa cpu em vez de gpu)
     const [chosenEncoder] = foundEncoders.length ? foundEncoders.sort(() => Math.random() - 0.5) : ['hevc'];
     console.log('chosenEncoder -->', chosenEncoder);
-
-    // verificar se a gpu e nvidia (windows e ubuntu). debian usa 'nvidia-detect'
-    const isNvidiaGpu = await execAsync('nvidia-smi --query-gpu=name --format=csv,noheader').then(success => true).catch(error => false);
-    console.log('isNvidiaGpu -->', isNvidiaGpu);
 
     // verificar se e um arquivo de video
     const isVideoFile = file.fileMedium == 'video' ? true : false;
